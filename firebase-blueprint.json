@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "list": {
+      "title": "List",
+      "description": "Represents a collaborative list document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerEmail": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "emoji": { "type": "string" },
+        "color": { "type": "string" },
+        "pinnedBy": { "type": "array" },
+        "sharedWith": { "type": "object" },
+        "publicAccess": { "type": "string" },
+        "password": { "type": "string" },
+        "isArchived": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "ownerEmail", "title", "category", "pinnedBy", "sharedWith", "publicAccess", "isArchived", "createdAt", "updatedAt"]
+    },
+    "item": {
+      "title": "Item",
+      "description": "An item inside a list",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "note": { "type": "string" },
+        "quantity": { "type": "string" },
+        "url": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "completedBy": { "type": "string" }
+      },
+      "required": ["id", "title", "completed", "order", "createdAt"]
+    },
+    "activity": {
+      "title": "Activity",
+      "description": "An action log for collaborative list activity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userEmail", "action", "details", "timestamp"]
+    },
+    "presence": {
+      "title": "Presence",
+      "description": "Active user tracking for real-time list viewing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "lastActive": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "email", "lastActive"]
+    }
+  },
+  "firestore": {
+    "/lists/{listId}": {
+      "schema": "list",
+      "description": "Main collection of collaborative lists"
+    },
+    "/lists/{listId}/items/{itemId}": {
+      "schema": "item",
+      "description": "Subcollection of items within a list"
+    },
+    "/lists/{listId}/activities/{activityId}": {
+      "schema": "activity",
+      "description": "Subcollection of activity history logs for a list"
+    },
+    "/lists/{listId}/presences/{presenceId}": {
+      "schema": "presence",
+      "description": "Subcollection of active visitor sessions for a list"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "PinList",
+  "description": "A collaborative list-sharing tool that lets users create, manage, pin, and share lists with real-time updates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

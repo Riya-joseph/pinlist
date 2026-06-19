@@ -1,0 +1,216 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Common helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Helper: matches owner 'uid' field
+    function isListOwner(listData) {
+      return request.auth != null && listData != null && (
+        (listData.keys().hasAny(['ownerId']) && listData.ownerId == request.auth.uid) ||
+        (listData.keys().hasAny(['owner']) && listData.owner == request.auth.uid) ||
+        (listData.keys().hasAny(['owner']) && listData.owner is map && listData.owner.uid == request.auth.uid)
+      );
+    }
+
+    // Helper: can read a list
+    function canReadList(listData) {
+      return listData != null && (
+        isListOwner(listData) ||
+        (request.auth != null && 'email' in request.auth.token && 
+          listData.keys().hasAny(['sharedWith']) && 
+          listData.sharedWith is map && 
+          (listData.sharedWith.keys().hasAny([request.auth.token.email]) || 
+           listData.sharedWith.keys().hasAny([request.auth.token.email.lower()]))
+        ) ||
+        (listData.keys().hasAny(['publicAccess']) && (listData.publicAccess == "view" || listData.publicAccess == "edit"))
+      );
+    }
+
+    // Helper: can write/edit a list or items in a list
+    function canEditList(listData) {
+      return listData != null && (
+        isListOwner(listData) ||
+        (request.auth != null && 'email' in request.auth.token && 
+          listData.keys().hasAny(['sharedWith']) && 
+          listData.sharedWith is map && 
+          (listData.sharedWith.get(request.auth.token.email, "none") == "edit" || 
+           listData.sharedWith.get(request.auth.token.email.lower(), "none") == "edit")
+        ) ||
+        (listData.keys().hasAny(['publicAccess']) && listData.publicAccess == "edit")
+      );
+    }
+
+    // Helper: fetch a parent list document
+    function getList(listId) {
+      return get(/databases/$(database)/documents/lists/$(listId)).data;
+    }
+
+    // List validation helper
+    function isValidList(list) {
+      return list.id is string && list.id.size() <= 128 &&
+             (
+               (list.keys().hasAny(['ownerId']) && list.ownerId is string && list.ownerId.size() <= 128) ||
+               (list.keys().hasAny(['owner']) && list.owner is string && list.owner.size() <= 128) ||
+               (list.keys().hasAny(['owner']) && list.owner is map && list.owner.uid is string && list.owner.uid.size() <= 128)
+             ) &&
+             list.ownerEmail is string && list.ownerEmail.size() <= 128 &&
+             list.title is string && list.title.size() > 0 && list.title.size() <= 200 &&
+             list.category is string && (list.category in ["grocery", "wishlist", "articles", "custom"]) &&
+             list.emoji is string && list.emoji.size() <= 16 &&
+             list.color is string && (list.color in ["red", "blue", "green", "slate", "amber", "purple", "orange", "pink", "indigo"]) &&
+             list.pinnedBy is list &&
+             list.sharedWith is map &&
+             list.publicAccess is string && (list.publicAccess in ["none", "view", "edit"]) &&
+             (!list.keys().hasAny(["password"]) || list.password is string) &&
+             list.isArchived is bool;
+    }
+
+    match /lists/{listId} {
+      allow get: if isValidId(listId) && canReadList(existing());
+      
+      // Secure List Queries
+      allow list: if request.auth != null && (
+        (existing().keys().hasAny(['ownerId']) && existing().ownerId == request.auth.uid) ||
+        (existing().keys().hasAny(['owner']) && existing().owner == request.auth.uid) ||
+        (existing().keys().hasAny(['owner']) && existing().owner is map && existing().owner.uid == request.auth.uid)
+      );
+      allow list: if existing().publicAccess == "view" || existing().publicAccess == "edit";
+      allow list: if request.auth != null && 'email' in request.auth.token && 
+                    existing().keys().hasAny(['sharedWith']) &&
+                    existing().sharedWith is map &&
+                    (existing().sharedWith.keys().hasAny([request.auth.token.email]) || 
+                     existing().sharedWith.keys().hasAny([request.auth.token.email.lower()]));
+
+      allow create: if isValidId(listId) &&
+                    request.auth != null &&
+                    (
+                      (incoming().keys().hasAny(['ownerId']) && incoming().ownerId == request.auth.uid) ||
+                      (incoming().keys().hasAny(['owner']) && incoming().owner == request.auth.uid) ||
+                      (incoming().keys().hasAny(['owner']) && incoming().owner is map && incoming().owner.uid == request.auth.uid)
+                    ) &&
+                    incoming().createdAt == request.time &&
+                    incoming().updatedAt == request.time &&
+                    isValidList(incoming()) &&
+                    incoming().id == listId;
+
+      allow update: if isValidId(listId) &&
+                    isValidList(incoming()) &&
+                    incoming().updatedAt == request.time &&
+                    (
+                      (!incoming().keys().hasAny(['ownerId']) && !existing().keys().hasAny(['ownerId'])) ||
+                      (incoming().keys().hasAny(['ownerId']) && existing().keys().hasAny(['ownerId']) && incoming().ownerId == existing().ownerId)
+                    ) &&
+                    (
+                      (!incoming().keys().hasAny(['owner']) && !existing().keys().hasAny(['owner'])) ||
+                      (incoming().keys().hasAny(['owner']) && existing().keys().hasAny(['owner']) && incoming().owner == existing().owner)
+                    ) &&
+                    incoming().createdAt == existing().createdAt && (
+                      // Action 1: Owner full edit except immutable fields
+                      isListOwner(existing()) ||
+                      // Action 2: Contributor partial edit (e.g. archiving or updating settings, pinning/adding comments, etc.)
+                      (canEditList(existing()) && incoming().diff(existing()).affectedKeys().hasOnly(['pinnedBy', 'updatedAt'])) ||
+                      // Action 3: PinnedBy change is permitted for users to pin/unpin if they have read access
+                      (canReadList(existing()) && incoming().diff(existing()).affectedKeys().hasOnly(['pinnedBy', 'updatedAt']))
+                    );
+
+      allow delete: if isValidId(listId) &&
+                    isListOwner(existing());
+
+      // Nested collection: Items
+      match /items/{itemId} {
+        function isValidItem(item) {
+          return item.id is string && item.id.size() <= 128 &&
+                 item.title is string && item.title.size() > 0 && item.title.size() <= 300 &&
+                 (!item.keys().hasAny(["note"]) || item.note is string) &&
+                 (!item.keys().hasAny(["quantity"]) || item.quantity is string) &&
+                 (!item.keys().hasAny(["url"]) || item.url is string) &&
+                 item.completed is bool &&
+                 item.order is number;
+        }
+
+        allow read, list: if isValidId(listId) && canReadList(getList(listId));
+
+        allow create: if isValidId(listId) && isValidId(itemId) &&
+                      canEditList(getList(listId)) &&
+                      incoming().createdAt == request.time &&
+                      isValidItem(incoming()) &&
+                      incoming().id == itemId;
+
+        allow update: if isValidId(listId) && isValidId(itemId) &&
+                      canEditList(getList(listId)) &&
+                      isValidItem(incoming()) &&
+                      incoming().createdAt == existing().createdAt && (
+                        // Owner/editor can edit any field of item
+                        true
+                      );
+
+        allow delete: if isValidId(listId) && isValidId(itemId) &&
+                      canEditList(getList(listId));
+      }
+
+      // Nested collection: Activities
+      match /activities/{activityId} {
+        function isValidActivity(act) {
+          return act.id is string && act.id.size() <= 128 &&
+                 act.userId is string && act.userId.size() <= 128 &&
+                 act.userEmail is string && act.userEmail.size() <= 128 &&
+                 act.action is string && act.action.size() <= 50 &&
+                 act.details is string && act.details.size() <= 300;
+        }
+
+        allow read, list: if isValidId(listId) && canReadList(getList(listId));
+
+        allow create: if isValidId(listId) && isValidId(activityId) &&
+                      canEditList(getList(listId)) &&
+                      incoming().timestamp == request.time &&
+                      isValidActivity(incoming()) &&
+                      incoming().id == activityId;
+                      
+        allow update, delete: if false; // Logs are immutable
+      }
+
+      // Nested collection: Presence
+      match /presences/{presenceId} {
+        function isValidPresence(p) {
+          return p.id is string && p.id.size() <= 128 &&
+                 p.email is string && p.email.size() <= 128;
+        }
+
+        allow read, list: if isValidId(listId) && canReadList(getList(listId));
+
+        allow create, update: if isValidId(listId) && isValidId(presenceId) &&
+                              canReadList(getList(listId)) &&
+                              incoming().lastActive == request.time &&
+                              isValidPresence(incoming()) &&
+                              incoming().id == presenceId;
+
+        allow delete: if isValidId(listId) && canReadList(getList(listId));
+      }
+    }
+  }
+}
